@@ -1,0 +1,10 @@
+services:
+  openwatcom:
+    platform: linux/x86_64
+    image: arlaneenalra/watcom-docker:latest
+    volumes:
+      - .:/src
+    working_dir: /src
+    command: /bin/bash
+    stdin_open: true
+    tty: true
