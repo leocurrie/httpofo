@@ -1,0 +1,4 @@
+*.exe
+*.o
+tests/venv
+tests/__pycache__

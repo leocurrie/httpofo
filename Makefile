@@ -3,10 +3,10 @@
 CC=wcl
 CFLAGS=-bt=dos -ms -wx -we -zq
 
-all: webserver.exe
+all: httpofo.exe
 
-webserver.exe: webserver.c network.c network.h
-	$(CC) $(CFLAGS) -fe=webserver.exe webserver.c network.c
+httpofo.exe: httpofo.c network.c network.h
+	$(CC) $(CFLAGS) -fe=httpofo.exe httpofo.c network.c
 
 clean:
 	rm -f *.com *.exe *.obj *.err

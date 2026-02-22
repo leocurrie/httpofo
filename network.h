@@ -8,8 +8,7 @@
  *============================================================================*/
 
 /* IP addresses (network byte order - big endian) */
-#define LOCAL_IP  0xC0A80164UL  /* 192.168.1.100 */
-#define TARGET_IP 0xC0A80101UL  /* 192.168.1.1 */
+extern unsigned long local_ip;
 
 /*============================================================================
  * Byte Order Helpers
@@ -114,6 +113,12 @@ void ip_receive(unsigned char *pkt, unsigned short len);
 void ip_send(unsigned long dst_ip, unsigned char protocol,
              unsigned char *payload, unsigned char payload_len);
 
+/* Console output */
+void print_char(char c);
+void print_str(char *s);
+void print_uint(unsigned short n);
+void print_ulong(unsigned long n);
+
 /* Helper functions */
 unsigned short checksum(unsigned char *data, unsigned short len);
 unsigned short get_u16(unsigned char *p);
@@ -129,7 +134,6 @@ unsigned short tcp_checksum(unsigned char *tcp_pkt, unsigned short tcp_len,
 void tcp_send_flags(unsigned char flags, unsigned char *data, unsigned char data_len);
 void tcp_send(unsigned char *data, unsigned char len);
 void tcp_close(void);
-void tcp_connect(unsigned long remote_ip, unsigned short remote_port);
 void tcp_listen(unsigned short port);
 void tcp_check_retransmit(void);  /* Call from main loop */
 

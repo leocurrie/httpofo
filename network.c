@@ -1,6 +1,5 @@
 /* network.c - Shared network stack for Atari Portfolio */
 
-#include <stdio.h>
 #include <conio.h>
 #include <string.h>
 #include "network.h"
@@ -171,6 +170,8 @@ void cleanup_serial(void) {
  * SLIP Layer
  *============================================================================*/
 
+unsigned long local_ip = 0xC0A80164UL;  /* Default: 192.168.1.100 */
+
 unsigned char pkt_buf[PKT_BUF_SIZE];
 unsigned short pkt_len = 0;
 unsigned char slip_escaped = 0;
@@ -267,12 +268,28 @@ void put_u16(unsigned char *p, unsigned short val) {
     p[1] = (unsigned char)val;
 }
 
+void print_char(char c) { putch(c); }
+
+void print_str(char *s) { while (*s) putch(*s++); }
+
+void print_ulong(unsigned long n) {
+    char buf[11];
+    unsigned char i = 0;
+    if (n == 0) { putch('0'); return; }
+    while (n > 0) { buf[i++] = '0' + (unsigned char)(n % 10); n /= 10; }
+    while (i > 0) putch(buf[--i]);
+}
+
+void print_uint(unsigned short n) { print_ulong((unsigned long)n); }
+
 void print_ip(unsigned long ip) {
-    printf("%u.%u.%u.%u",
-           (unsigned char)(ip >> 24),
-           (unsigned char)(ip >> 16),
-           (unsigned char)(ip >> 8),
-           (unsigned char)ip);
+    print_ulong((ip >> 24) & 0xFF);
+    putch('.');
+    print_ulong((ip >> 16) & 0xFF);
+    putch('.');
+    print_ulong((ip >> 8) & 0xFF);
+    putch('.');
+    print_ulong(ip & 0xFF);
 }
 
 unsigned long parse_ip(char *s) {
@@ -338,7 +355,7 @@ void ip_receive(unsigned char *pkt, unsigned short len) {
     src_ip = get_u32(&pkt[IP_SRC_IP]);
     dst_ip = get_u32(&pkt[IP_DST_IP]);
 
-    if (dst_ip != LOCAL_IP) return;
+    if (dst_ip != local_ip) return;
 
     protocol = pkt[IP_PROTO];
 
@@ -369,7 +386,7 @@ void ip_send(unsigned long dst_ip, unsigned char protocol,
     tx_buf[IP_TTL] = 64;
     tx_buf[IP_PROTO] = protocol;
     put_u16(&tx_buf[IP_CHECKSUM], 0);
-    put_u32(&tx_buf[IP_SRC_IP], LOCAL_IP);
+    put_u32(&tx_buf[IP_SRC_IP], local_ip);
     put_u32(&tx_buf[IP_DST_IP], dst_ip);
 
     cksum = checksum(tx_buf, IP_HEADER_LEN);
@@ -419,8 +436,12 @@ void icmp_receive(unsigned char *pkt, unsigned short len, unsigned long src_ip) 
     ip_bytes[3] = (unsigned char)src_ip;
 
     if (type == ICMP_ECHO_REQUEST) {
-        printf("Ping from %u.%u.%u.%u seq=%u\n",
-               ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3], seq);
+        print_str("Ping from ");
+        print_uint(ip_bytes[0]); putch('.');
+        print_uint(ip_bytes[1]); putch('.');
+        print_uint(ip_bytes[2]); putch('.');
+        print_uint(ip_bytes[3]);
+        print_str(" seq="); print_uint(seq); putch('\r'); putch('\n');
 
         pkt[ICMP_TYPE] = ICMP_ECHO_REPLY;
         pkt[ICMP_CODE] = 0;
@@ -550,7 +571,7 @@ void tcp_process_queue(void) {
     if (tcp_state != TCP_STATE_LISTEN) return;
 
     if (conn_queue_pop(&ip, &port, &seq)) {
-        printf("[Dequeue: %u remaining]\n", conn_queue_count);
+        print_str("[Dequeue: "); print_uint(conn_queue_count); print_str(" remaining]\r\n");
         if (app_tcp_accept(ip, port)) {
             tcp_remote_ip = ip;
             tcp_remote_port = port;
@@ -558,6 +579,7 @@ void tcp_process_queue(void) {
             tcp_ack_num = seq + 1;
             tcp_send_flags(TCP_SYN | TCP_ACK, 0, 0);
             tcp_state = TCP_STATE_SYN_RECEIVED;
+            retx_time = get_tick_count();  /* Track when SYN+ACK was sent */
             app_tcp_state_changed(TCP_STATE_LISTEN, tcp_state, ip, port);
         }
     }
@@ -626,7 +648,7 @@ void tcp_send_flags(unsigned char flags, unsigned char *data, unsigned char data
         memcpy(&tcp_buf[TCP_HEADER_LEN], data, data_len);
     }
 
-    cksum = tcp_checksum(tcp_buf, tcp_len, LOCAL_IP, tcp_remote_ip);
+    cksum = tcp_checksum(tcp_buf, tcp_len, local_ip, tcp_remote_ip);
     put_u16(&tcp_buf[TCP_CHECKSUM], cksum);
 
     if (flags & TCP_SYN) tcp_seq_num++;
@@ -673,6 +695,18 @@ void tcp_check_retransmit(void) {
     unsigned long now;
     unsigned long saved_seq;
 
+    /* If stuck waiting for ACK of our SYN+ACK, time out and try next queued connection */
+    if (tcp_state == TCP_STATE_SYN_RECEIVED) {
+        now = get_tick_count();
+        if ((now - retx_time) >= RETX_TIMEOUT) {
+            tcp_state = TCP_STATE_LISTEN;
+            app_tcp_state_changed(TCP_STATE_SYN_RECEIVED, TCP_STATE_LISTEN,
+                                  tcp_remote_ip, tcp_remote_port);
+            tcp_process_queue();
+        }
+        return;
+    }
+
     if (tcp_state != TCP_STATE_ESTABLISHED || retx_len == 0) {
         return;
     }
@@ -685,12 +719,12 @@ void tcp_check_retransmit(void) {
 
         if (retx_attempts > RETX_MAX_ATTEMPTS) {
             /* Give up - connection probably dead */
-            printf("[Retransmit failed]\n");
+            print_str("[Retransmit failed]\r\n");
             retx_len = 0;
             return;
         }
 
-        printf("[Retransmit #%u]\n", retx_attempts);
+        print_str("[Retransmit #"); print_uint(retx_attempts); print_str("]\r\n");
 
         /* Rewind sequence number and resend */
         saved_seq = tcp_seq_num;
@@ -728,7 +762,7 @@ void tcp_receive(unsigned char *pkt, unsigned short len, unsigned long src_ip) {
     /* Queue SYNs if we're busy (not in LISTEN state) */
     if ((flags & TCP_SYN) && !(flags & TCP_ACK) && tcp_state != TCP_STATE_LISTEN) {
         conn_queue_add(src_ip, src_port, seq_num);
-        printf("[Queued: %u pending]\n", conn_queue_count);
+        print_str("[Queued: "); print_uint(conn_queue_count); print_str(" pending]\r\n");
         return;
     }
 
@@ -755,6 +789,7 @@ void tcp_receive(unsigned char *pkt, unsigned short len, unsigned long src_ip) {
                 tcp_ack_num = seq_num + 1;
                 tcp_send_flags(TCP_SYN | TCP_ACK, 0, 0);
                 tcp_state = TCP_STATE_SYN_RECEIVED;
+                retx_time = get_tick_count();
                 app_tcp_state_changed(old_state, tcp_state, src_ip, src_port);
             }
         }
@@ -827,15 +862,6 @@ void tcp_receive(unsigned char *pkt, unsigned short len, unsigned long src_ip) {
 }
 
 /* Connect to remote host (client mode) */
-void tcp_connect(unsigned long remote_ip, unsigned short remote_port) {
-    tcp_remote_ip = remote_ip;
-    tcp_remote_port = remote_port;
-    tcp_seq_num = 1000;
-    tcp_ack_num = 0;
-    tcp_state = TCP_STATE_SYN_SENT;
-    tcp_send_flags(TCP_SYN, 0, 0);
-}
-
 /* Start listening (server mode) */
 void tcp_listen(unsigned short port) {
     tcp_local_port = port;
